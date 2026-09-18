@@ -1,0 +1,11 @@
+services:
+  binance-trading-system:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: binance-trading-system
+    restart: unless-stopped
+    ports:
+      - "${SERVER_PORT:-3335}:3335"
+    environment:
+      - NODE_ENV=production
