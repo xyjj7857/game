@@ -18,6 +18,7 @@ export interface ParseResult {
   candles: Candle[];
   detectedColumns: Partial<ColumnMapping>;
   availableColumns: string[];
+  rawHeaders?: string[];
   sampleRows: Record<string, any>[];
   detectedInterval: string;
   error?: string;
@@ -197,6 +198,7 @@ export async function parseFileToCandles(
       candles,
       detectedColumns: mapping,
       availableColumns,
+      rawHeaders: availableColumns,
       sampleRows: rows.slice(0, 5),
       detectedInterval: detected.label,
       filename,

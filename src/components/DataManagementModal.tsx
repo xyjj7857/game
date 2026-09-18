@@ -865,7 +865,7 @@ export const DataManagementModal: React.FC<DataManagementModalProps> = ({
                             className="w-full bg-[#121c27] text-slate-200 text-xs rounded px-1.5 py-1 border border-[#223348] focus:outline-none focus:border-cyan-400"
                           >
                             <option value="">未匹配</option>
-                            {parseResult.rawHeaders.map((h) => (
+                            {(parseResult.rawHeaders || parseResult.availableColumns || []).map((h) => (
                               <option key={h} value={h}>
                                 {h}
                               </option>
