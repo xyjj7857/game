@@ -1,5 +1,5 @@
 import React from 'react';
-import { ZoomIn, ZoomOut, Search, RotateCcw, Swords, Eye, EyeOff } from 'lucide-react';
+import { ZoomIn, ZoomOut, Search, RotateCcw, Swords, Eye, EyeOff, Maximize2 } from 'lucide-react';
 import { CalculatedCandle, TimeframeInterval } from '../types/market';
 import { INTERVAL_LABELS } from '../utils/resampler';
 import { formatExactPrice } from '../utils/formatters';
@@ -19,6 +19,8 @@ interface ChartHeaderProps {
     isRevealed: boolean;
   };
   onToggleBlindReveal?: () => void;
+  isFeatureK?: boolean;
+  featureKName?: string;
 }
 
 export const ChartHeader: React.FC<ChartHeaderProps> = ({
@@ -31,6 +33,8 @@ export const ChartHeader: React.FC<ChartHeaderProps> = ({
   onOpenSearch,
   blindPractice,
   onToggleBlindReveal,
+  isFeatureK,
+  featureKName,
 }) => {
   if (!activeCandle) {
     return (
@@ -126,6 +130,14 @@ export const ChartHeader: React.FC<ChartHeaderProps> = ({
           {intervalLabel}
         </span>
 
+        {/* Feature K Gold Indicator Badge */}
+        {isFeatureK && (
+          <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/50 text-[11px] font-bold flex items-center gap-1.5 shadow-sm">
+            <span className="w-2 h-2 rounded-full bg-amber-400 shadow-sm shadow-amber-400/50"></span>
+            <span>特征K{featureKName ? ` · ${featureKName}` : ''}</span>
+          </span>
+        )}
+
         {/* In-progress bar badge if incomplete */}
         {activeCandle.isClosed === false && (
           <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold flex items-center gap-1 shadow-sm">
@@ -199,7 +211,15 @@ export const ChartHeader: React.FC<ChartHeaderProps> = ({
         </div>
 
         {/* Quick Tools */}
-        <div className="flex items-center gap-1 text-slate-400 pl-2 border-l border-[#1f2e40]">
+        <div className="flex items-center gap-1.5 text-slate-400 pl-2 border-l border-[#1f2e40]">
+          <button
+            onClick={onResetView}
+            title="K线全屏自适应展示 (Auto-Fit)"
+            className="px-2 py-0.5 text-xs text-cyan-400 hover:text-cyan-300 hover:bg-[#162332] rounded transition-colors flex items-center gap-1 border border-[#1f2e40]"
+          >
+            <Maximize2 className="w-3 h-3" />
+            <span>自适应</span>
+          </button>
           <button
             onClick={onZoomIn}
             title="放大K线 (Zoom In)"

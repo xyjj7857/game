@@ -1,8 +1,16 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { Maximize2 } from 'lucide-react';
 import { CalculatedCandle, TradeRecord, Position } from '../types/market';
 import { formatExactPrice, formatAxisPrice } from '../utils/formatters';
 
-interface KlineChartProps {
+export interface KlineChartHandle {
+  zoomIn: () => void;
+  zoomOut: () => void;
+  autoFit: () => void;
+  resetView: () => void;
+}
+
+export interface KlineChartProps {
   candles: CalculatedCandle[];
   trades?: TradeRecord[];
   positions?: Position[];
@@ -10,9 +18,10 @@ interface KlineChartProps {
   replayIndex?: number; // Up to which candle to reveal (for backtest replay)
   flashTimestamp?: number; // The timestamp of the feature K to flash
   flashTriggerId?: number; // Unique ID to re-trigger the flash animation
+  featureKTimestamps?: Set<number>; // Timestamps of all feature K-lines to permanently mark with yellow frame
 }
 
-export const KlineChart: React.FC<KlineChartProps> = ({
+export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(({
   candles,
   trades = [],
   positions = [],
@@ -20,7 +29,8 @@ export const KlineChart: React.FC<KlineChartProps> = ({
   replayIndex,
   flashTimestamp,
   flashTriggerId,
-}) => {
+  featureKTimestamps,
+}, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -36,6 +46,8 @@ export const KlineChart: React.FC<KlineChartProps> = ({
   const [dragStartX, setDragStartX] = useState<number>(0);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [hoverY, setHoverY] = useState<number | null>(null);
+  // Auto-fit mode: automatically fits visible candles to container width and resolution
+  const [isAutoFit, setIsAutoFit] = useState<boolean>(true);
 
   // Determine active slice of candles based on replay index
   const effectiveCandles = React.useMemo(() => {
@@ -48,10 +60,83 @@ export const KlineChart: React.FC<KlineChartProps> = ({
   // Keep latest candle in view when replay advances
   useEffect(() => {
     if (replayIndex !== undefined && effectiveCandles.length > 0) {
-      // Auto follow latest candle if near right edge
       setScrollOffset(0);
     }
   }, [replayIndex, effectiveCandles.length]);
+
+  // Adaptive dimension calculation based on container resolution & candle count
+  const calculateOptimalDimensions = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const priceScaleWidth = 140;
+    const chartWidth = rect.width - priceScaleWidth;
+    if (chartWidth <= 0) return;
+
+    const count = effectiveCandles.length;
+    if (count === 0) {
+      setCandleWidth(14);
+      setCandleGap(4);
+      return;
+    }
+
+    if (count <= 50) {
+      // Small number of bars (e.g. initial backtest / early replay or newly listed coin)
+      // Adaptively scale so bars span comfortably across the screen width with clear bodies
+      const availableWidth = Math.max(100, chartWidth - 80);
+      const targetStep = Math.min(50, Math.max(14, Math.floor(availableWidth / Math.max(1, count))));
+      const newCandleWidth = Math.max(6, Math.round(targetStep * 0.72));
+      const newCandleGap = Math.max(2, targetStep - newCandleWidth);
+      setCandleWidth(newCandleWidth);
+      setCandleGap(newCandleGap);
+      setScrollOffset(0);
+    } else {
+      // Normal / large number of bars: calculate optimal bar density for the screen resolution
+      // Target comfortable visible bars (e.g. 55-85 depending on screen width)
+      const comfortableCount = Math.min(count, Math.max(45, Math.round(chartWidth / 20)));
+      const targetStep = Math.max(7, Math.min(30, Math.floor((chartWidth - 50) / comfortableCount)));
+      const newCandleWidth = Math.max(4, Math.round(targetStep * 0.74));
+      const newCandleGap = Math.max(1, targetStep - newCandleWidth);
+      setCandleWidth(newCandleWidth);
+      setCandleGap(newCandleGap);
+    }
+  }, [effectiveCandles.length]);
+
+  // Handle Zoom In
+  const handleZoomIn = useCallback(() => {
+    setIsAutoFit(false);
+    setCandleWidth((w) => Math.min(54, w + 3));
+    setCandleGap((g) => Math.min(16, Math.max(2, Math.round(g * 1.25))));
+  }, []);
+
+  // Handle Zoom Out
+  const handleZoomOut = useCallback(() => {
+    setIsAutoFit(false);
+    setCandleWidth((w) => Math.max(3, w - 3));
+    setCandleGap((g) => Math.max(1, Math.round(g * 0.8)));
+  }, []);
+
+  // Handle Auto-Fit / Reset View
+  const handleAutoFit = useCallback(() => {
+    setIsAutoFit(true);
+    setScrollOffset(0);
+    calculateOptimalDimensions();
+  }, [calculateOptimalDimensions]);
+
+  // Expose methods via ref
+  useImperativeHandle(ref, () => ({
+    zoomIn: handleZoomIn,
+    zoomOut: handleZoomOut,
+    autoFit: handleAutoFit,
+    resetView: handleAutoFit,
+  }), [handleZoomIn, handleZoomOut, handleAutoFit]);
+
+  // Auto-fit on candle count changes if auto-fit mode is active
+  useEffect(() => {
+    if (isAutoFit) {
+      calculateOptimalDimensions();
+    }
+  }, [effectiveCandles.length, isAutoFit, calculateOptimalDimensions]);
 
   // Handle render loop on canvas
   const drawChart = useCallback(() => {
@@ -100,13 +185,17 @@ export const KlineChart: React.FC<KlineChartProps> = ({
 
     // Layout dimensions
     const priceScaleWidth = 140;
-    const timeScaleHeight = 26;
-    const volumeHeight = Math.max(60, height * 0.18);
-    const mainChartHeight = height - timeScaleHeight - volumeHeight - 10;
+    const timeScaleHeight = 24;
+    const volumeHeight = Math.max(45, Math.min(85, height * 0.16));
+    const mainChartHeight = height - timeScaleHeight - volumeHeight - 8;
     const chartWidth = width - priceScaleWidth;
 
+    const leftPadding = 24;
+    const rightPadding = 24;
+    const availableWidth = Math.max(10, chartWidth - leftPadding - rightPadding);
+
     const step = candleWidth + candleGap;
-    const maxVisibleCandles = Math.ceil(chartWidth / step) + 2;
+    const maxVisibleCandles = Math.ceil(availableWidth / step) + 2;
 
     // Calculate start & end indices
     // scrollOffset = 0 means pinned to right edge
@@ -119,6 +208,8 @@ export const KlineChart: React.FC<KlineChartProps> = ({
 
     const visibleCandles = effectiveCandles.slice(startIndex, endIndex + 1);
     if (visibleCandles.length === 0) return;
+
+    const contentWidth = visibleCandles.length * step;
 
     // Find Price Min / Max in visible range
     let minPrice = Infinity;
@@ -158,16 +249,18 @@ export const KlineChart: React.FC<KlineChartProps> = ({
 
     const volumeToY = (vol: number) => {
       const volMax = maxVolume > 0 ? maxVolume * 1.2 : 1;
-      const volTop = height - timeScaleHeight - volumeHeight;
       return height - timeScaleHeight - (vol / volMax) * volumeHeight;
     };
 
     // Calculate X coordinate for candle at index (relative to startIndex)
-    // The rightmost visible candle aligns at chartWidth - step/2
+    // When fewer candles than available width and not scrolled, center with balanced margins
+    // When filling the chart or scrolled, align from right edge
     const getCandleX = (idxInVisible: number) => {
-      const rightPadding = 12;
-      const totalVis = visibleCandles.length;
-      return chartWidth - rightPadding - (totalVis - 1 - idxInVisible) * step;
+      if (contentWidth < availableWidth && scrollOffset === 0) {
+        const startX = leftPadding + (availableWidth - contentWidth) / 2 + step / 2;
+        return startX + idxInVisible * step;
+      }
+      return chartWidth - rightPadding - step / 2 - (visibleCandles.length - 1 - idxInVisible) * step;
     };
 
     // 1. Draw horizontal price grid lines & labels
@@ -195,16 +288,19 @@ export const KlineChart: React.FC<KlineChartProps> = ({
     }
     ctx.setLineDash([]); // Reset line dash
 
-    // 2. Draw vertical time grid lines & labels
+    // 2. Draw vertical time grid lines & labels (strictly avoid label collisions regardless of resolution)
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    const timeLabelStep = Math.max(1, Math.floor(visibleCandles.length / 7));
+    const minTimeLabelDistance = 90; // minimum pixels between time labels to guarantee zero overlap
+    const timeLabelStep = Math.max(1, Math.ceil(minTimeLabelDistance / step));
+    let lastLabelX = -Infinity;
 
     for (let i = 0; i < visibleCandles.length; i += timeLabelStep) {
       const c = visibleCandles[i];
       const x = getCandleX(i);
 
-      if (x < 20 || x > chartWidth - 20) continue;
+      if (x < 35 || x > chartWidth - 35) continue;
+      if (x - lastLabelX < minTimeLabelDistance) continue;
 
       // Vertical line
       ctx.setLineDash([2, 4]);
@@ -219,7 +315,8 @@ export const KlineChart: React.FC<KlineChartProps> = ({
       const d = new Date(c.timestamp);
       const timeStr = `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
       ctx.fillStyle = TEXT_MUTED;
-      ctx.fillText(timeStr, x, height - timeScaleHeight + 6);
+      ctx.fillText(timeStr, x, height - timeScaleHeight + 5);
+      lastLabelX = x;
     }
 
     // Border line between volume & time scale
@@ -259,6 +356,26 @@ export const KlineChart: React.FC<KlineChartProps> = ({
       // Draw Candle Body
       ctx.fillStyle = candleColor;
       ctx.fillRect(x - candleWidth / 2, topY, candleWidth, bodyHeight);
+
+      // Feature K Permanent Yellow Outer Frame (所有满足的特征K，在K线实体柱外圈标识一圈黄框并永久保留，以便回头看)
+      const isFeatureK = featureKTimestamps ? featureKTimestamps.has(c.timestamp) : false;
+      if (isFeatureK) {
+        // 外圈留出 2px 间距，清晰环绕实体柱外圈形成明显黄框
+        const borderPadding = 2;
+        const boxX = x - candleWidth / 2 - borderPadding;
+        const boxY = topY - borderPadding;
+        const boxW = candleWidth + borderPadding * 2;
+        const boxH = bodyHeight + borderPadding * 2;
+
+        // 实体柱外圈醒目黄框 (#FFE600 纯正明亮黄色)
+        ctx.strokeStyle = '#FFE600';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+        // 微弱柔和的金黄色底色，增强实体轮廓与辨识度
+        ctx.fillStyle = 'rgba(255, 230, 0, 0.12)';
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+      }
 
       // If this candle is an in-progress incomplete bar (anti-leakage dynamic bar)
       if (c.isClosed === false) {
@@ -499,6 +616,7 @@ export const KlineChart: React.FC<KlineChartProps> = ({
     trades,
     positions,
     flashTimestamp,
+    featureKTimestamps,
   ]);
 
   // Handle ResizeObserver
@@ -507,11 +625,14 @@ export const KlineChart: React.FC<KlineChartProps> = ({
     if (!container) return;
 
     const observer = new ResizeObserver(() => {
+      if (isAutoFit) {
+        calculateOptimalDimensions();
+      }
       drawChart();
     });
     observer.observe(container);
     return () => observer.disconnect();
-  }, [drawChart]);
+  }, [drawChart, isAutoFit, calculateOptimalDimensions]);
 
   // Redraw when dependencies change
   useEffect(() => {
@@ -569,30 +690,50 @@ export const KlineChart: React.FC<KlineChartProps> = ({
       const deltaX = e.clientX - dragStartX;
       const candlesMoved = Math.round(deltaX / step);
       if (candlesMoved !== 0) {
+        setIsAutoFit(false);
         setScrollOffset((prev) => {
           const next = prev + candlesMoved;
-          return Math.max(0, Math.min(effectiveCandles.length - 10, next));
+          return Math.max(0, Math.min(Math.max(0, effectiveCandles.length - 3), next));
         });
         setDragStartX(e.clientX);
       }
     }
 
     if (x >= 0 && x <= chartWidth && y >= 0 && y <= rect.height) {
-      // Find hovered candle in visible range
-      const rightPadding = 12;
+      const leftPadding = 24;
+      const rightPadding = 24;
+      const availableWidth = Math.max(10, chartWidth - leftPadding - rightPadding);
       const totalCount = effectiveCandles.length;
       let endIndex = totalCount - 1 - scrollOffset;
       if (endIndex >= totalCount) endIndex = totalCount - 1;
+      if (endIndex < 0) endIndex = 0;
+      const maxVisibleCandles = Math.ceil(availableWidth / step) + 2;
+      const startIndex = Math.max(0, endIndex - maxVisibleCandles);
+      const visibleCandles = effectiveCandles.slice(startIndex, endIndex + 1);
+      const contentWidth = visibleCandles.length * step;
 
-      const offsetFromRight = chartWidth - rightPadding - x;
-      const indexFromRight = Math.round(offsetFromRight / step);
-      const targetIdx = endIndex - indexFromRight;
+      let foundIdx = -1;
+      let minDiff = Infinity;
+      for (let i = 0; i < visibleCandles.length; i++) {
+        let candleX = 0;
+        if (contentWidth < availableWidth && scrollOffset === 0) {
+          candleX = leftPadding + (availableWidth - contentWidth) / 2 + step / 2 + i * step;
+        } else {
+          candleX = chartWidth - rightPadding - step / 2 - (visibleCandles.length - 1 - i) * step;
+        }
 
-      if (targetIdx >= 0 && targetIdx < effectiveCandles.length) {
-        setHoverIndex(targetIdx);
+        const diff = Math.abs(x - candleX);
+        if (diff < minDiff && diff <= Math.max(12, step * 0.75)) {
+          minDiff = diff;
+          foundIdx = startIndex + i;
+        }
+      }
+
+      if (foundIdx !== -1 && foundIdx < effectiveCandles.length) {
+        setHoverIndex(foundIdx);
         setHoverY(y);
         if (onHoverCandle) {
-          onHoverCandle(effectiveCandles[targetIdx]);
+          onHoverCandle(effectiveCandles[foundIdx]);
         }
       } else {
         setHoverIndex(null);
@@ -625,10 +766,11 @@ export const KlineChart: React.FC<KlineChartProps> = ({
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
+    setIsAutoFit(false);
     if (e.deltaY < 0) {
       // Zoom in
-      setCandleWidth((w) => Math.min(48, w + 2));
-      setCandleGap((g) => Math.min(12, g + 0.5));
+      setCandleWidth((w) => Math.min(54, w + 2));
+      setCandleGap((g) => Math.min(16, g + 0.5));
     } else {
       // Zoom out
       setCandleWidth((w) => Math.max(3, w - 2));
@@ -637,7 +779,7 @@ export const KlineChart: React.FC<KlineChartProps> = ({
   };
 
   return (
-    <div ref={containerRef} className="relative w-full h-full min-h-[420px] bg-[#0a1017] overflow-hidden">
+    <div ref={containerRef} className="relative w-full h-full min-h-0 bg-[#0a1017] overflow-hidden select-none">
       <canvas
         ref={canvasRef}
         onMouseDown={handleMouseDown}
@@ -647,6 +789,21 @@ export const KlineChart: React.FC<KlineChartProps> = ({
         onWheel={handleWheel}
         className="w-full h-full cursor-crosshair block"
       />
+
+      {/* Floating Auto-Fit (自适应) Toggle Button on Bottom-Right */}
+      <button
+        type="button"
+        onClick={handleAutoFit}
+        title={isAutoFit ? '当前为自适应展示状态，点击刷新适配' : '开启K线全屏自适应展示 (Auto-Fit)'}
+        className={`absolute bottom-8 right-[148px] z-10 px-2.5 py-1 rounded text-xs font-mono flex items-center gap-1.5 transition-all shadow-md backdrop-blur-sm cursor-pointer ${
+          isAutoFit
+            ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/50 shadow-cyan-500/20 font-semibold'
+            : 'bg-[#121c27]/85 text-slate-400 hover:text-slate-100 hover:bg-[#1a2736] border border-[#23354a]'
+        }`}
+      >
+        <Maximize2 className={`w-3 h-3 ${isAutoFit ? 'text-cyan-400' : 'text-slate-400'}`} />
+        <span>自适应</span>
+      </button>
     </div>
   );
-};
+});

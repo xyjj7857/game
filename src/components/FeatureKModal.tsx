@@ -47,6 +47,8 @@ interface FeatureKModalProps {
   candles: CalculatedCandle[];
   currentInterval: string;
   onJumpToEvent: (event: FeatureKEvent) => void;
+  settings?: FeatureKSettings;
+  onUpdateSettings?: (settings: FeatureKSettings) => void;
 }
 
 export const FeatureKModal: React.FC<FeatureKModalProps> = ({
@@ -55,9 +57,11 @@ export const FeatureKModal: React.FC<FeatureKModalProps> = ({
   candles,
   currentInterval,
   onJumpToEvent,
+  settings: propSettings,
+  onUpdateSettings,
 }) => {
-  // Load permanently saved settings from localStorage
-  const [settings, setSettings] = useState<FeatureKSettings>(() => {
+  // Load permanently saved settings from localStorage as fallback
+  const [localSettings, setLocalSettings] = useState<FeatureKSettings>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
@@ -87,6 +91,8 @@ export const FeatureKModal: React.FC<FeatureKModalProps> = ({
     return DEFAULT_SETTINGS;
   });
 
+  const settings = propSettings || localSettings;
+
   // Result filter view tab: 'all' | 'smart' | 'custom'
   const [filterTab, setFilterTab] = useState<'all' | 'smart' | 'custom'>('all');
   // Sort order: 'asc' (chronological #1 -> #N) | 'desc' (latest #N -> #1)
@@ -94,15 +100,17 @@ export const FeatureKModal: React.FC<FeatureKModalProps> = ({
 
   // Helper to persist updates permanently
   const updateSettings = (updater: (prev: FeatureKSettings) => FeatureKSettings) => {
-    setSettings((prev) => {
-      const next = updater(prev);
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      } catch (e) {
-        console.error('Failed to save custom Feature K settings to localStorage:', e);
-      }
-      return next;
-    });
+    const next = updater(settings);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    } catch (e) {
+      console.error('Failed to save custom Feature K settings to localStorage:', e);
+    }
+    if (onUpdateSettings) {
+      onUpdateSettings(next);
+    } else {
+      setLocalSettings(next);
+    }
   };
 
   // 1. Detect Smart Feature K events

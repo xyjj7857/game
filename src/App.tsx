@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { TopNavigationBar } from './components/TopNavigationBar';
 import { ChartHeader } from './components/ChartHeader';
-import { KlineChart } from './components/KlineChart';
+import { KlineChart, KlineChartHandle } from './components/KlineChart';
 import { DataManagementModal } from './components/DataManagementModal';
 import { FeatureKModal, FEATURE_K_STORAGE_KEY, DEFAULT_FEATURE_K_SETTINGS } from './components/FeatureKModal';
 import { TradeExecutionPanel } from './components/TradeExecutionPanel';
@@ -48,6 +48,8 @@ interface ToastNotification {
 }
 
 export default function App() {
+  const chartRef = useRef<KlineChartHandle>(null);
+
   // Raw market data state
   const [symbol, setSymbol] = useState<string>('BTCUSDT');
   const [rawCandles, setRawCandles] = useState<Candle[]>(() => generateSampleBTC15m());
@@ -201,6 +203,73 @@ export default function App() {
   const fullCalculatedCandles = useMemo(() => {
     return calculateIndicators(fullAggregatedCandles);
   }, [fullAggregatedCandles]);
+
+  // Persistent Feature K Settings state across sessions
+  const [featureKSettings, setFeatureKSettings] = useState<FeatureKSettings>(() => {
+    try {
+      const saved = localStorage.getItem(FEATURE_K_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          enableSmart: parsed.enableSmart ?? false,
+          enableCustom: parsed.enableCustom ?? true,
+          customConfig: {
+            minTurnover: Number(parsed.customConfig?.minTurnover ?? 8000000),
+            enableGain: parsed.customConfig?.enableGain ?? true,
+            gainThreshold: Number(parsed.customConfig?.gainThreshold ?? 10),
+            enableDrop: parsed.customConfig?.enableDrop ?? true,
+            dropThreshold: Number(parsed.customConfig?.dropThreshold ?? 10),
+            enableAmplitude: parsed.customConfig?.enableAmplitude ?? true,
+            amplitudeThreshold: Number(parsed.customConfig?.amplitudeThreshold ?? 15),
+            enableVolSurge1: parsed.customConfig?.enableVolSurge1 ?? true,
+            volSurge1Ratio: Number(parsed.customConfig?.volSurge1Ratio ?? 2),
+            enableVolSurge2: parsed.customConfig?.enableVolSurge2 ?? true,
+            volSurge2Lookback: Number(parsed.customConfig?.volSurge2Lookback ?? 5),
+            volSurge2Ratio: Number(parsed.customConfig?.volSurge2Ratio ?? 5),
+          },
+        };
+      }
+    } catch (e) {
+      console.warn('Failed to parse feature K settings', e);
+    }
+    return DEFAULT_FEATURE_K_SETTINGS;
+  });
+
+  const handleUpdateFeatureKSettings = useCallback((newSettings: FeatureKSettings) => {
+    setFeatureKSettings(newSettings);
+    try {
+      localStorage.setItem(FEATURE_K_STORAGE_KEY, JSON.stringify(newSettings));
+    } catch (e) {
+      console.warn('Failed to save feature K settings to localStorage', e);
+    }
+  }, []);
+
+  // Compute all matching Feature K events across the current timeframe
+  const featureKEventMap = useMemo(() => {
+    const map = new Map<number, FeatureKEvent>();
+    if (!fullCalculatedCandles || fullCalculatedCandles.length === 0) return map;
+
+    if (featureKSettings.enableSmart) {
+      const smartEvents = detectFeatureKEvents(fullCalculatedCandles);
+      for (const e of smartEvents) {
+        map.set(e.timestamp, e);
+      }
+    }
+
+    if (featureKSettings.enableCustom) {
+      const customEvents = detectCustomFeatureKEvents(fullCalculatedCandles, featureKSettings.customConfig);
+      for (const e of customEvents) {
+        map.set(e.timestamp, e);
+      }
+    }
+
+    return map;
+  }, [fullCalculatedCandles, featureKSettings]);
+
+  // Set of timestamps for permanent yellow border display on the chart
+  const featureKTimestamps = useMemo(() => {
+    return new Set(featureKEventMap.keys());
+  }, [featureKEventMap]);
 
   // Anti-leakage / Multi-timeframe dynamic synthesis toggle (default: true)
   const [includeIncompleteBar, setIncludeIncompleteBar] = useState<boolean>(true);
@@ -594,6 +663,8 @@ export default function App() {
     currentReplayCompletedTimestampRef.current = targetCutoff;
     setReplayCutoffTimestamp(targetCutoff);
 
+    setFlashState({ timestamp: event.timestamp, triggerId: Date.now() });
+
     setBacktestState((prev) => ({
       ...prev,
       isRunning: false,
@@ -614,43 +685,8 @@ export default function App() {
       return;
     }
 
-    // 1. Get feature K settings from localStorage or defaults
-    let featureKSettings: FeatureKSettings = DEFAULT_FEATURE_K_SETTINGS;
-    try {
-      const saved = localStorage.getItem(FEATURE_K_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        featureKSettings = {
-          enableSmart: parsed.enableSmart ?? false,
-          enableCustom: parsed.enableCustom ?? true,
-          customConfig: {
-            minTurnover: Number(parsed.customConfig?.minTurnover ?? 8000000),
-            enableGain: parsed.customConfig?.enableGain ?? true,
-            gainThreshold: Number(parsed.customConfig?.gainThreshold ?? 10),
-            enableDrop: parsed.customConfig?.enableDrop ?? true,
-            dropThreshold: Number(parsed.customConfig?.dropThreshold ?? 10),
-            enableAmplitude: parsed.customConfig?.enableAmplitude ?? true,
-            amplitudeThreshold: Number(parsed.customConfig?.amplitudeThreshold ?? 15),
-            enableVolSurge1: parsed.customConfig?.enableVolSurge1 ?? true,
-            volSurge1Ratio: Number(parsed.customConfig?.volSurge1Ratio ?? 2),
-            enableVolSurge2: parsed.customConfig?.enableVolSurge2 ?? true,
-            volSurge2Lookback: Number(parsed.customConfig?.volSurge2Lookback ?? 5),
-            volSurge2Ratio: Number(parsed.customConfig?.volSurge2Ratio ?? 5),
-          },
-        };
-      }
-    } catch (e) {
-      console.warn('Failed to parse feature K settings for direct jump', e);
-    }
-
-    // 2. Detect all events matching active configuration
-    const allEvents: FeatureKEvent[] = [];
-    if (featureKSettings.enableSmart) {
-      allEvents.push(...detectFeatureKEvents(fullCalculatedCandles));
-    }
-    if (featureKSettings.enableCustom) {
-      allEvents.push(...detectCustomFeatureKEvents(fullCalculatedCandles, featureKSettings.customConfig));
-    }
+    // 1. Get all events matching active configuration from featureKEventMap
+    const allEvents = Array.from(featureKEventMap.values());
 
     if (allEvents.length === 0) {
       showToast(
@@ -1242,23 +1278,35 @@ export default function App() {
       />
 
       {/* 2. Chart Info Sub-Header matching screenshot */}
-      <ChartHeader
-        symbol={symbol}
-        currentInterval={selectedInterval}
-        activeCandle={hoveredCandle || calculatedCandles[backtestState.currentIndex] || calculatedCandles[0] || null}
-        onZoomIn={() => {}}
-        onZoomOut={() => {}}
-        onResetView={handleResetBacktest}
-        onOpenSearch={() => {
-          if (isMarketSyncing) {
-            showToast('行情尚未同步完成，请稍后', 'warning', '数据同步中无法跳转特征K线。');
-            return;
-          }
-          setIsFeatureKModalOpen(true);
-        }}
-        blindPractice={blindPractice}
-        onToggleBlindReveal={handleToggleBlindReveal}
-      />
+      {(() => {
+        const activeBar = hoveredCandle || calculatedCandles[backtestState.currentIndex] || calculatedCandles[0] || null;
+        const isCurFeatureK = activeBar ? featureKTimestamps.has(activeBar.timestamp) : false;
+        const curFeatureKEvent = activeBar ? featureKEventMap.get(activeBar.timestamp) : undefined;
+
+        return (
+          <ChartHeader
+            symbol={symbol}
+            currentInterval={selectedInterval}
+            activeCandle={activeBar}
+            onZoomIn={() => chartRef.current?.zoomIn()}
+            onZoomOut={() => chartRef.current?.zoomOut()}
+            onResetView={() => {
+              chartRef.current?.autoFit();
+            }}
+            onOpenSearch={() => {
+              if (isMarketSyncing) {
+                showToast('行情尚未同步完成，请稍后', 'warning', '数据同步中无法跳转特征K线。');
+                return;
+              }
+              setIsFeatureKModalOpen(true);
+            }}
+            blindPractice={blindPractice}
+            onToggleBlindReveal={handleToggleBlindReveal}
+            isFeatureK={isCurFeatureK}
+            featureKName={curFeatureKEvent?.name}
+          />
+        );
+      })()}
 
       {/* 3. Main Candlestick Chart Stage */}
       <main 
@@ -1275,6 +1323,7 @@ export default function App() {
         }}
       >
         <KlineChart
+          ref={chartRef}
           candles={calculatedCandles}
           trades={backtestState.trades}
           positions={backtestState.positions}
@@ -1282,6 +1331,7 @@ export default function App() {
           replayIndex={backtestState.currentIndex}
           flashTimestamp={flashState?.timestamp}
           flashTriggerId={flashState?.triggerId}
+          featureKTimestamps={featureKTimestamps}
         />
       </main>
 
@@ -1328,6 +1378,8 @@ export default function App() {
         candles={fullCalculatedCandles}
         currentInterval={selectedInterval}
         onJumpToEvent={handleJumpToEvent}
+        settings={featureKSettings}
+        onUpdateSettings={handleUpdateFeatureKSettings}
       />
     </div>
   );
