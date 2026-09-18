@@ -1,0 +1,6 @@
+{
+  "name": "币安合约半自动交易回测系统",
+  "description": "专业级币安永续合约K线回测与半自动交易技术验证平台，支持多周期合成聚合、在线行情防封冷却获取、多格式表格导入及步进回放交易。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
