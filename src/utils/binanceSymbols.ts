@@ -461,8 +461,9 @@ export async function loadLiveBinanceFuturesSymbols(forceRefresh = false): Promi
   }
 
   const endpoints = [
-    'https://fapi.binance.com/fapi/v1/exchangeInfo',
-    'https://fapi.binance.vision/fapi/v1/exchangeInfo',
+    '/api/binance-futures/fapi/v1/exchangeInfo', // 1. 优先通过本服务器反向代理（走服务器自身出口 IP）
+    'https://fapi.binance.com/fapi/v1/exchangeInfo', // 2. 官方直连备用
+    'https://fapi.binance.vision/fapi/v1/exchangeInfo', // 3. 官方容灾节点
   ];
 
   for (const url of endpoints) {

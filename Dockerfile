@@ -18,11 +18,14 @@ COPY . .
 RUN npm run build
 
 # ==========================================
-# 阶段 2: 生产级 Nginx 轻量运行镜像
+# 阶段 2: 生产级 Nginx 轻量运行镜像（集成币安 API 反向代理）
 # ==========================================
 FROM nginx:alpine
 
-# 复制 Nginx 配置文件（默认监听 3335 端口与 SPA 路由支持）
+# 安装 CA 证书（保障反向代理 HTTPS SNI 握手安全）与时区工具
+RUN apk add --no-cache ca-certificates tzdata
+
+# 复制 Nginx 配置文件（监听 3335 端口、币安接口反向代理与 SPA 路由支持）
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # 将构建好的静态文件复制到 Nginx 托管目录

@@ -104,12 +104,14 @@ const CACHE_TTL = 30 * 1000; // 30 seconds cache
 
 const ENDPOINTS = {
   futures: [
-    'https://fapi.binance.com/fapi/v1/klines',
-    'https://fapi.binance.vision/fapi/v1/klines',
+    '/api/binance-futures/fapi/v1/klines', // 1. 优先走本服务器反向代理（使用服务器自身出口 IP 请求币安，不受客户端浏览器网络限制）
+    'https://fapi.binance.com/fapi/v1/klines', // 2. 官方直连备用
+    'https://fapi.binance.vision/fapi/v1/klines', // 3. 官方容灾节点
   ],
   spot: [
-    'https://api.binance.com/api/v3/klines',
-    'https://data-api.binance.vision/api/v3/klines',
+    '/api/binance-spot/api/v3/klines', // 1. 优先走本服务器反向代理
+    'https://api.binance.com/api/v3/klines', // 2. 官方直连备用
+    'https://data-api.binance.vision/api/v3/klines', // 3. 官方容灾节点
   ],
 };
 
@@ -248,13 +250,33 @@ export async function fetchAllBinanceKlines(options: BinanceFetchOptions): Promi
       endTime: String(currentEndTime),
     });
 
-    let response: Response;
-    try {
-      response = await fetch(`${baseUrl}?${params.toString()}`);
-    } catch (netErr: any) {
-      // Retry once on network glitch
-      await new Promise((r) => setTimeout(r, 1000));
-      response = await fetch(`${baseUrl}?${params.toString()}`);
+    let response: Response | null = null;
+    let lastError: Error | null = null;
+
+    for (const url of endpointList) {
+      try {
+        const resp = await fetch(`${url}?${params.toString()}`);
+        if (resp.ok || resp.status === 429 || resp.status === 418) {
+          response = resp;
+          break;
+        }
+
+        const errorText = await resp.clone().text();
+        if (errorText.includes('-1121') || errorText.includes('Invalid symbol')) {
+          response = resp;
+          break;
+        }
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+
+    if (!response) {
+      if (allCandles.length > 0) {
+        console.warn('Sync stopped early due to network failure, returning collected candles');
+        break;
+      }
+      throw lastError || new Error('无法连接到币安行情服务器');
     }
 
     if (!response.ok) {
@@ -378,7 +400,35 @@ async function fetchPaginatedKlines(
       endTime: String(currentEndTime),
     });
 
-    const response = await fetch(`${baseUrl}?${params.toString()}`);
+    let response: Response | null = null;
+    let lastError: Error | null = null;
+
+    for (const url of endpointList) {
+      try {
+        const resp = await fetch(`${url}?${params.toString()}`);
+        if (resp.ok || resp.status === 429 || resp.status === 418) {
+          response = resp;
+          break;
+        }
+
+        const errorText = await resp.clone().text();
+        if (errorText.includes('-1121') || errorText.includes('Invalid symbol')) {
+          response = resp;
+          break;
+        }
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+
+    if (!response) {
+      if (allCandles.length > 0) {
+        console.warn('Partial fetch succeeded before network error, returning collected data');
+        break;
+      }
+      throw lastError || new Error('分批获取历史行情失败：无法连接到币安服务器');
+    }
+
     if (!response.ok) {
       const errorText = await response.text();
       let parsedJson: any = null;

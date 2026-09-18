@@ -21,10 +21,38 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      proxy: {
+        '/api/binance-futures': {
+          target: 'https://fapi.binance.com',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/binance-futures/, ''),
+          secure: true,
+        },
+        '/api/binance-spot': {
+          target: 'https://api.binance.com',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/binance-spot/, ''),
+          secure: true,
+        },
+      },
     },
     preview: {
       port: serverPort,
       host: '0.0.0.0',
+      proxy: {
+        '/api/binance-futures': {
+          target: 'https://fapi.binance.com',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/binance-futures/, ''),
+          secure: true,
+        },
+        '/api/binance-spot': {
+          target: 'https://api.binance.com',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/binance-spot/, ''),
+          secure: true,
+        },
+      },
     },
   };
 });
